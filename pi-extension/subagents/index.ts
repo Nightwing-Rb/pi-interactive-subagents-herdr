@@ -233,6 +233,39 @@ function getToolExtensionPath(tool: string): string | undefined {
 }
 
 /**
+ * Tool extensions provided by packages installed on THIS machine rather than
+ * by pi's legacy built-in extension directory (`~/.pi/agent/extensions`).
+ * Here `web_search` / `web_fetch` / `web_crawl` / `web_screenshot` are
+ * registered natively at session_start by the `donsetch` npm package, so the
+ * legacy `web-search/index.ts` paths never exist on disk — without this map,
+ * children launched with `--no-extensions` would silently lose the web tools
+ * their agent frontmatter allowlists.
+ *
+ * The file is only published when the package is actually installed; a
+ * legacy built-in path that exists on disk still takes precedence (see
+ * getToolExtensionPath).
+ */
+const PACKAGE_TOOL_EXTENSIONS: Readonly<Record<string, string>> = (() => {
+  const donsetch = join(getAgentConfigDir(), "npm", "node_modules", "donsetch", "pi-extension.ts");
+  if (!existsSync(donsetch)) return {};
+  return Object.fromEntries(
+    ["web_search", "web_fetch", "web_crawl", "web_screenshot"].map((t) => [t, donsetch]),
+  );
+})();
+
+/** Publish package-backed tool extensions so child spawns can re-enable them. */
+function registerPackageToolExtensions(): void {
+  for (const [name, path] of Object.entries(PACKAGE_TOOL_EXTENSIONS)) {
+    try {
+      registerToolExtension(name, path);
+    } catch {
+      // Already registered with the same path (idempotent/reload-safe), or
+      // shadows a built-in tool in this pi version — leave it alone.
+    }
+  }
+}
+
+/**
  * When this process was spawned as a restricted subagent, the parent pins the
  * set of agents it may itself spawn via PI_SUBAGENT_ALLOWED. `null` means no
  * restriction (top-level session, or an unrestricted child).
@@ -1658,6 +1691,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     if (!prevAbort || prevAbort.signal.aborted) {
       (globalThis as any)[POLL_ABORT_KEY] = new AbortController();
     }
+    // Publish machine-provided tool extensions (e.g. donsetch's web tools) so
+    // subagent children launched with --no-extensions can be given them back
+    // via -e. Runs before any spawn can happen in this session.
+    registerPackageToolExtensions();
   });
 
   // Clean up on session shutdown

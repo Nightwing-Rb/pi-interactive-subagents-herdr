@@ -1209,8 +1209,19 @@ describe("subagent discovery", () => {
   it("getToolExtensionPath maps custom tools and skips built-ins", () => {
     assert.equal(testApi.getToolExtensionPath("read"), undefined);
     assert.equal(testApi.getToolExtensionPath("bash"), undefined);
-    assert.ok(testApi.getToolExtensionPath("web_search")?.endsWith("web-search/index.ts"));
-    assert.ok(testApi.getToolExtensionPath("safe_bash")?.endsWith("tools/safe-bash.ts"));
+    // web_search: legacy built-in path when it exists on disk (older pi
+    // layouts), otherwise undefined until a package registers it at
+    // session_start (pi 1.4.0 has no ~/.pi/agent/extensions/web-search).
+    const webSearch = testApi.getToolExtensionPath("web_search");
+    if (webSearch !== undefined) {
+      assert.ok(webSearch.endsWith("web-search/index.ts"));
+    }
+    assert.ok(
+      testApi
+        .getToolExtensionPath("safe_bash")
+        ?.replace(/\\/g, "/")
+        .endsWith("tools/safe-bash.ts"),
+    );
     // Spawning tools are registered by this extension itself.
     assert.ok(testApi.getToolExtensionPath("subagent")?.endsWith("index.ts"));
   });
