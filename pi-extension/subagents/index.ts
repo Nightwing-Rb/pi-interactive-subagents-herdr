@@ -2365,6 +2365,22 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   pi.registerCommand("subagent", {
     description:
       "Spawn an async subagent: /subagent <agent> <task> — result returns as a new turn",
+    getArgumentCompletions: (argumentPrefix) => {
+      // Offer agent names while the first argument is being typed. Once a
+      // space follows the agent the rest is free-form task text — stay out of
+      // the way. Hidden (disable-model-invocation) agents remain spawnable by
+      // explicit name but are not offered, matching subagents_list.
+      const typed = argumentPrefix.trim();
+      if (/\s/.test(typed)) return null;
+      const items = discoverAgentDefinitions()
+        .filter((a) => !a.disableModelInvocation && a.name.startsWith(typed) && a.name !== typed)
+        .map((a) => ({
+          value: a.name,
+          label: a.name,
+          ...(a.description ? { description: a.description } : {}),
+        }));
+      return items.length > 0 ? items : null;
+    },
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       if (!trimmed) {
