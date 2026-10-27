@@ -271,7 +271,12 @@ function parseSessionMode(value: string | undefined): SubagentSessionMode | unde
   return undefined;
 }
 
-function parseAgentDefinition(content: string, fallbackName: string): AgentDefinition | null {
+function parseAgentDefinition(rawContent: string, fallbackName: string): AgentDefinition | null {
+  // Agent files on Windows are frequently checked out or saved with CRLF
+  // line endings (e.g. core.autocrlf=true). The frontmatter delimiters and
+  // value regexes below are LF-anchored, so normalize first — otherwise every
+  // bundled agent silently fails to parse on such checkouts.
+  const content = rawContent.replace(/\r\n/g, "\n");
   const match = content.match(/^---\n([\s\S]*?)\n---/);
   if (!match) return null;
 

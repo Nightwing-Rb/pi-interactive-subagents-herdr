@@ -1,0 +1,5 @@
+# Keep every source file LF in the working tree on all platforms.
+# The extension's frontmatter parsing, and the bundled shell scripts under
+# pi-extension/subagents/plugin/, must not receive CRLF endings from
+# Windows checkouts (core.autocrlf=true).
+* text=auto eol=lf
