@@ -2363,7 +2363,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 
   // /subagent command — spawn a subagent by name
   pi.registerCommand("subagent", {
-    description: "Spawn a subagent: /subagent <agent> <task>",
+    description:
+      "Spawn an async subagent: /subagent <agent> <task> — result returns as a new turn",
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       if (!trimmed) {
