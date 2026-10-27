@@ -15,6 +15,13 @@
 > `C:\Program Files\Git\bin\bash.exe`. Bundled agents use
 > `xiaomi/mimo-v2.6-flash`; override per machine in `~/.pi/agent/agents/*.md`.
 
+> **Machine setup.** [`setup/`](setup/README.md) snapshots this machine's full pi
+> configuration — extensions (ask-user-question, bash-guard, prompt-snippets,
+> herdr-agent-state), the sapphire-ember theme, model catalog, tool config and
+> command tweaks — with a one-shot `setup/bootstrap.ps1`. On a new machine:
+> install pi, clone this repo, run the bootstrap, `/login xiaomi`. See
+> [setup/README.md](setup/README.md).
+
 Async subagents for [pi](https://github.com/badlogic/pi-mono), running in tmux panes. Spawn a sub-agent, keep working in the main session, and get the result steered back when it finishes. Fully non-blocking.
 
 **tmux-only fork.** See [Acknowledgements](#acknowledgements) for the upstream project, which also supports cmux, zellij, and WezTerm.

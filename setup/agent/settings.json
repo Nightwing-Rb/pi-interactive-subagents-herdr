@@ -1,0 +1,10 @@
+{
+  "lastChangelogVersion": "1.4.0",
+  "defaultProvider": "xiaomi",
+  "defaultModel": "mimo-v2.6-flash",
+  "theme": "sapphire-ember",
+  "packages": [
+    "npm:pi-compact-tools",
+    "npm:donsetch"
+  ]
+}

@@ -1,0 +1,10 @@
+# Safety net: never commit machine state or credentials even if this
+# directory is later synced wholesale from ~/.pi/agent.
+auth.json
+sessions/
+npm/
+install/
+bin/
+git/
+compact-tools-notices/
+*.bak
