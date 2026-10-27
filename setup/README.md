@@ -12,7 +12,7 @@ identical setup: same packages, extensions, theme, models, and tool config.
 | `extensions/` — ask-user-question, bash-guard, herdr-agent-state, prompt-snippets (+ snippets) | `sessions/` — conversation history |
 | `themes/sapphire-ember.json` | `install/`, `bin/` — pi itself (installer handles it) |
 | `models-store.json` (xiaomi/mimo catalog) | `npm/`, `git/` — package checkouts (reinstalled by bootstrap) |
-| `compact-tools.json`, `pi-mini-mode.json` | |
+| `compact-tools.json` | |
 
 The subagent extension itself **is this repo** (root: `package.json`,
 `pi-extension/`, bundled `agents/`), including all local fixes:
