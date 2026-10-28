@@ -3,7 +3,7 @@ import { DynamicBorder, isToolCallEventType } from "@mariozechner/pi-coding-agen
 import type { SelectItem } from "@mariozechner/pi-tui";
 import { Container, SelectList, Text } from "@mariozechner/pi-tui";
 import { parse as shellParse } from "shell-quote";
-import { HEADLESS_BLOCKED, MAIN_DISABLED_BLOCKED } from "./patterns";
+import { HEADLESS_BLOCKED, MAIN_DISABLED_BLOCKED, matchBlocked, normalizeCommand } from "./patterns";
 
 type Severity = "high" | "medium";
 
@@ -55,16 +55,20 @@ function analyzeSegment(seg: Token[]): Risk | null {
 	const args = tokensToStrings(seg);
 	if (args.length === 0) return null;
 
+	// Skip leading NAME=VALUE environment assignments (`FOO=1 rm -rf` must analyze `rm`).
+	while (args.length > 1 && /^[A-Za-z_][\w-]*=/.test(args[0])) args.shift();
+
 	const cmd = args[0];
 	const rest = args.slice(1);
 
 	// Pipe-to-shell: only flag when the command *receiving* the pipe is a shell,
 	// instead of any mention of a shell name anywhere in the segment
-	// (so `echo "bash" | grep` is not flagged).
+	// (so `echo "bash" | grep` is not flagged). Check every hop, not just the first
+	// (`curl url | grep x | sh` must escalate too).
 	const pipeSegments = splitOnOps(seg, ["|"]);
 	if (pipeSegments.length > 1) {
-		const pipedTo = tokensToStrings(pipeSegments[1])[0];
-		if (pipedTo && ["sh", "bash", "zsh", "fish"].includes(pipedTo)) {
+		const receivers = pipeSegments.slice(1).map((s) => tokensToStrings(s)[0]);
+		if (receivers.some((r) => r && ["sh", "bash", "zsh", "fish"].includes(r))) {
 			reasons.push("pipe to a shell (possible remote code execution)");
 			severity = "high";
 		}
@@ -287,7 +291,7 @@ function analyzeBashCommand(command: string): Risk | null {
 
 	// Whole-command operator checks
 	const ops = tokens.filter(isOpToken).map((t) => t.op);
-	if (ops.some((op) => op === ">" || op === ">>" || op === "2>" || op === "2>>")) {
+	if (ops.some((op) => op === ">" || op === ">>")) {
 		reasons.push("shell output redirection (can overwrite files)");
 		severity = severity === "high" ? "high" : "medium";
 	}
@@ -313,12 +317,19 @@ function analyzeBashCommand(command: string): Risk | null {
 	return { severity, reasons: uniq };
 }
 
-async function promptRunOrAbort(ctx: any, command: string, risk: Risk): Promise<"run" | "abort"> {
-	if (!ctx.hasUI) return "abort";
-
+async function promptRunOrAbort(ctx: any, command: string, risk: Risk): Promise<"run" | "abort" | "no-ui"> {
 	const reasonsText = risk.reasons.map((r) => `• ${r}`).join("\n");
 	const header = `Command flagged as ${risk.severity.toUpperCase()} risk:`;
 	const body = `${header}\n\n${reasonsText}\n\nCommand:\n${command}`;
+
+	// Custom terminal components only exist in the TUI. RPC clients have a UI but only
+	// support dialogs/notifications (ctx.ui.confirm); JSON/print modes have no UI at all.
+	// Anything without a usable interaction path must fail closed.
+	if (ctx.mode !== "tui" || !ctx.hasUI) {
+		if (!ctx.hasUI) return "no-ui";
+		const ok = await ctx.ui.confirm("Potentially destructive bash command", body);
+		return ok ? "run" : "abort";
+	}
 
 	const items: SelectItem[] = [
 		{ value: "run", label: "Run", description: "Execute the command" },
@@ -361,13 +372,20 @@ async function promptRunOrAbort(ctx: any, command: string, risk: Risk): Promise<
 // Subagent (headless) detection. pi-subagents/herdr marks spawned processes with
 // PI_SUBAGENT_NAME / PI_SUBAGENT_SESSION / PI_SUBAGENT_AGENT; other subagent frameworks
 // may use PI_SUBAGENT_DEPTH >= 1. Both marker styles are checked because neither is
-// universal. Behaviour branches on this: interactive prompting in the main session,
-// headless hard-block for catastrophic operations in subagents (where stdin is
-// /dev/null and no UI is available).
-const _subagentDepth = Number(process.env.PI_SUBAGENT_DEPTH ?? "0");
-const _isSubagent =
-	(Number.isFinite(_subagentDepth) && _subagentDepth >= 1) ||
-	Boolean(process.env.PI_SUBAGENT_NAME || process.env.PI_SUBAGENT_SESSION || process.env.PI_SUBAGENT_AGENT);
+// universal. Evaluated per tool call (not at module load) so late-bound env is honored;
+// a non-numeric PI_SUBAGENT_DEPTH fails closed (treated as a subagent). Behaviour branches
+// on this: interactive prompting in the main session, headless hard-block for catastrophic
+// operations in subagents (where stdin is /dev/null and no UI is available).
+function isSubagentSession(): boolean {
+	const raw = process.env.PI_SUBAGENT_DEPTH;
+	if (raw !== undefined && raw.trim() !== "") {
+		const n = Number(raw);
+		if (!Number.isFinite(n)) return true; // garbage => fail closed
+		if (n < 1) return false; // explicit 0 => main session
+		return true;
+	}
+	return Boolean(process.env.PI_SUBAGENT_NAME || process.env.PI_SUBAGENT_SESSION || process.env.PI_SUBAGENT_AGENT);
+}
 
 // Warning shown via ctx.ui.setStatus when bash-guard is disabled. Pi joins all
 // extension statuses on a single line sorted alphabetically by key, so:
@@ -384,27 +402,10 @@ const _isSubagent =
 const BASH_GUARD_STATUS_KEY = " bash-guard";
 
 export default function (pi: ExtensionAPI) {
-	if (_isSubagent) {
-		// Subagent mode: hard-block catastrophic operations, no prompting.
-		pi.on("tool_call", async (event) => {
-			if (!isToolCallEventType("bash", event)) return;
-			const command = event.input.command;
-			for (const { pattern, reason } of HEADLESS_BLOCKED) {
-				if (pattern.test(command)) {
-					return {
-						block: true,
-						reason:
-							`Blocked by bash-guard: ${reason}. ` +
-							"This is a non-interactive subagent session — catastrophic operations are not permitted. " +
-							"Propose a safer alternative or ask the parent agent to confirm with the user.",
-					};
-				}
-			}
-		});
-		return;
-	}
-
 	// Main session mode: interactive prompting.
+	// (Flags and commands are registered in every session; the tool handler branches on
+	// isSubagentSession() per call, so a misdetected factory registration cannot weaken
+	// subagent protection.)
 	pi.registerFlag("bash-guard-auto-allow", {
 		description: "If set, bash-guard will not block when no UI is available (non-interactive modes).",
 		type: "boolean",
@@ -420,8 +421,10 @@ export default function (pi: ExtensionAPI) {
 	// Session-local toggle. Intentionally not persisted across reloads or restarts.
 	let disabled = false;
 
-	pi.on("session_start", async (event, ctx) => {
-		if (event.reason === "startup" && pi.getFlag("--bash-guard-disabled") === true) {
+	pi.on("session_start", async (_event, ctx) => {
+		// The flag value is stable for the process; apply it on every session_start so
+		// /reload and resumed sessions keep the disabled state (the module re-evaluates).
+		if (pi.getFlag("bash-guard-disabled") === true) {
 			disabled = true;
 			const { theme } = ctx.ui;
 			const badge = theme.bg(
@@ -462,12 +465,29 @@ export default function (pi: ExtensionAPI) {
 		if (!isToolCallEventType("bash", event)) return;
 
 		const command = event.input.command;
+		const normalized = normalizeCommand(command);
 
-		// Disabled (autonomous) mode: skip interactive prompting entirely, but keep
-		// a hard-block floor for catastrophic operations.
-		if (disabled) {
-			for (const { pattern, reason } of MAIN_DISABLED_BLOCKED) {
-				if (pattern.test(command)) {
+		try {
+			// Subagent (headless) sessions: hard-block catastrophic operations, no prompting.
+			if (isSubagentSession()) {
+				const reason = matchBlocked(HEADLESS_BLOCKED, normalized);
+				if (reason) {
+					return {
+						block: true,
+						reason:
+							`Blocked by bash-guard: ${reason}. ` +
+							"This is a non-interactive subagent session — catastrophic operations are not permitted. " +
+							"Propose a safer alternative or ask the parent agent to confirm with the user.",
+					};
+				}
+				return;
+			}
+
+			// Disabled (autonomous) mode: skip interactive prompting entirely, but keep
+			// a hard-block floor for catastrophic operations.
+			if (disabled) {
+				const reason = matchBlocked(MAIN_DISABLED_BLOCKED, normalized);
+				if (reason) {
 					return {
 						block: true,
 						reason:
@@ -476,36 +496,64 @@ export default function (pi: ExtensionAPI) {
 							"Re-enable bash-guard with /bash-guard and confirm interactively, or propose a safer alternative.",
 					};
 				}
+				return;
 			}
-			return;
-		}
 
-		const risk = analyzeBashCommand(command);
-		if (!risk) return;
+			// Interactive mode: prompt on parse-based risk, with the hard-block list as a
+			// floor so wrapper commands (`timeout rm -rf`, `FOO=1 rm -rf`, `sh -c '...'`)
+			// can never slip through silently.
+			let risk = analyzeBashCommand(command);
+			const floorReason = matchBlocked(HEADLESS_BLOCKED, normalized);
+			if (floorReason) {
+				risk = {
+					severity: "high",
+					reasons: [...(risk?.reasons ?? []), `hard-block match: ${floorReason}`],
+				};
+			}
+			if (!risk) return;
 
-		const now = Date.now();
-		const lastAbort = recentlyAborted.get(command);
-		if (lastAbort && now - lastAbort < ABORT_REMEMBER_MS) {
+			const now = Date.now();
+			for (const [k, t] of recentlyAborted) {
+				if (now - t >= ABORT_REMEMBER_MS) recentlyAborted.delete(k);
+			}
+
+			// Explicit non-interactive opt-out wins over retry memory.
+			if (!ctx.hasUI && pi.getFlag("bash-guard-auto-allow") === true) return;
+
+			const lastAbort = recentlyAborted.get(command);
+			if (lastAbort && now - lastAbort < ABORT_REMEMBER_MS) {
+				return {
+					block: true,
+					reason:
+						"Blocked by bash-guard: command was already aborted recently. Ask the user for a safer alternative; do not retry the same command.",
+				};
+			}
+
+			const choice = await promptRunOrAbort(ctx, command, risk);
+			if (choice === "run") return;
+			if (choice === "no-ui") {
+				// No user was consulted — say so honestly and do not poison the retry memory.
+				return {
+					block: true,
+					reason:
+						"Blocked by bash-guard: no interactive UI is available to confirm this potentially destructive command. " +
+						"Ask the user to confirm, propose a safer alternative, or enable --bash-guard-auto-allow.",
+				};
+			}
+
+			recentlyAborted.set(command, now);
 			return {
 				block: true,
 				reason:
-					"Blocked by bash-guard: command was already aborted recently. Ask the user for a safer alternative; do not retry the same command.",
+					"Blocked by user via bash-guard (potentially destructive command). Ask the user for confirmation or propose a non-destructive alternative.",
+			};
+		} catch (err) {
+			// Fail closed: a tool_call handler failure blocks the call in pi anyway, but an
+			// explicit block gives the model a clear reason instead of an internal error.
+			return {
+				block: true,
+				reason: `Blocked by bash-guard: internal error while analyzing the command (${String(err)}). Failing closed.`,
 			};
 		}
-
-		if (!ctx.hasUI && pi.getFlag("--bash-guard-auto-allow")) {
-			// Non-interactive mode: allow when explicitly requested.
-			return;
-		}
-
-		const choice = await promptRunOrAbort(ctx, command, risk);
-		if (choice === "run") return;
-
-		recentlyAborted.set(command, now);
-		return {
-			block: true,
-			reason:
-				"Blocked by user via bash-guard (potentially destructive command). Ask the user for confirmation or propose a non-destructive alternative.",
-		};
 	});
 }

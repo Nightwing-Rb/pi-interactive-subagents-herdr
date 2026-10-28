@@ -3,17 +3,25 @@
 Intercepts agent-issued `bash` tool calls and applies different protection depending on whether
 the session is interactive (main session) or non-interactive (spawned subagent).
 
+Before matching, commands are **normalized**: line continuations are joined, comments stripped
+(POSIX word-start semantics), backslash escapes removed, quote marks dropped, and shell
+separators inside quoted spans neutralized. This defeats common disguises (`"rm" -rf`,
+`r\m -rf`, `rm file#1 -rf`, `sh -c "rm -rf x"`) without flagging quoted prose
+(`rg "reboot" docs`, `grep -E '(halt|poweroff)' logs`).
+
 ## Modes
 
-Behaviour is determined at registration time by whether the session runs inside a spawned
-subagent. Two marker styles are recognized because neither is universal:
+Behaviour is determined per tool call by whether the session runs inside a spawned subagent.
+Two marker styles are recognized because neither is universal:
 
-- `PI_SUBAGENT_DEPTH` ≥ 1 (other subagent frameworks)
+- `PI_SUBAGENT_DEPTH` ≥ 1 (other subagent frameworks; a non-numeric value fails closed)
 - `PI_SUBAGENT_NAME` / `PI_SUBAGENT_SESSION` / `PI_SUBAGENT_AGENT` (injected by pi-subagents/herdr)
 
-### Main session (`PI_SUBAGENT_DEPTH` = 0 or unset) — interactive prompt
+### Main session — interactive prompt
 
-- Heuristically detects destructive/questionable commands via shell-aware parsing
+- Heuristically detects destructive/questionable commands via shell-aware parsing, with the
+  hard-block list below as a floor (wrapper commands like `timeout rm -rf`, `FOO=1 rm -rf`,
+  `sh -c 'rm -rf x'` can never slip through silently)
 - Prompts for **any** `git ...` command (escalates severity for especially risky ones: `git rm`,
   `git reset --hard`, `git clean -fdx`, `git push --force`, `git reflog expire`, `git gc --prune`)
 - Prompts for disk/volume tooling: `diskutil`, `hdiutil`, `mkfs*`, `newfs_*`, `wipefs`, `parted`,
@@ -21,48 +29,45 @@ subagent. Two marker styles are recognized because neither is universal:
 - Prompts for: `rm`/`rmdir`/`unlink`, `sudo`, `find -delete`, `dd`, `truncate`, `sed -i`,
   `perl -pi`, `chmod/chown -R`, `mv/cp --force`, `kill`/`pkill`/`killall`, `shutdown`/`reboot`,
   `systemctl stop/disable`, `curl|sh`/`wget|sh`, `kubectl delete`, `terraform destroy`,
-  `aws s3 rm --recursive`, `gcloud delete`, shell redirections (`>`, `>>`, `2>`), pipes
-- Shows a 2-option dialog: **Run** / **Abort**
+  `aws s3 rm --recursive`, `gcloud delete`, shell redirections (`>`, `>>`), pipes
+- Shows a Run / Abort dialog in the TUI; RPC sessions get a `ctx.ui.confirm` dialog instead;
+  JSON/print modes fail closed (with `--bash-guard-auto-allow` as an explicit opt-out)
 - If aborted, the tool call is blocked and the model receives a clear reason
-- Remembers recently aborted commands for 60 s to prevent retry loops
+- Remembers recently aborted commands for 60 s to prevent retry loops (no-UI aborts do not
+  poison the memory; expired entries are pruned)
 
-### Subagent (`PI_SUBAGENT_DEPTH` ≥ 1) — headless hard-block
+### Subagent — headless hard-block
 
 Spawned subagents have no UI (stdin is `/dev/null`), so prompting is impossible. Instead,
 a focused set of catastrophic/unrecoverable operations is hard-blocked with no user interaction.
-All patterns are anchored to **command position** (start of input or after `;`, `&&`, `||`, `|`,
-newlines, etc.), so words appearing in arguments or search terms do not trigger blocks:
-`rg "reboot" docs` and `grep halt error.log` pass.
+Patterns are anchored to **command position** (start of input or after `;`, `&&`, `||`, `|`,
+newlines, etc., through wrappers like `sudo`/`timeout`/`xargs`/`sh -c`, with optional path
+prefixes), so words in arguments never trigger blocks.
 
 | Pattern | Reason |
 |---|---|
-| `rm -r` / `-rf` / `-Rf` (incl. via `xargs`, env wrappers) | Recursive deletion |
-| `Remove-Item -Recurse/-Force`, `rd /s`, `del /s` | Recursive/bulk deletion (Windows) |
-| `sudo` | Elevated privileges |
-| `curl\|sh`, `wget\|sh` | Pipe to shell (remote code execution) |
-| `iex` / `Invoke-Expression`, `irm\|iex` | PowerShell remote code execution |
+| `rm -r` / `-rf` / `-Rf` (incl. via wrappers, `xargs`, quoting/escapes) | Recursive deletion |
+| `Remove-Item`/`del`/`ri`/`rd` with `-Recurse`/`-Force` or `/s`, `del /s` | Recursive/bulk deletion (Windows) |
+| `find -delete`, `find -exec rm/sh/sudo` | Bulk deletion |
+| `sudo`, `su`, `doas`, `pkexec` | Elevated privileges |
+| `curl\|sh`, `wget\|sh`, `curl\|python -`, `irm\|iex`, `iex (irm …)` | Remote code execution |
 | `mkfs*`, `newfs_*` | Filesystem formatting |
-| `wipefs` | Disk signature wipe |
-| `diskutil erase/zeroDisk/secureErase/reformat` | Destructive disk operation |
-| `Format-Volume`, `Clear-Disk`, `Initialize-Disk` | Destructive disk operation (Windows) |
-| `dd of=/dev/…` | Raw disk write |
-| `parted`, `fdisk`, `gdisk`, `sgdisk` | Partition table management |
-| `cryptsetup` | Disk encryption management |
-| `zpool` | ZFS pool management |
-| `shutdown`, `reboot`, `halt`, `poweroff` | System power operation |
+| `wipefs` (`--list`/`-n` exempt) | Disk signature wipe |
+| `diskutil erase*/delete*`, `Format-Volume`, `Clear-Disk`, `Initialize-Disk` | Destructive disk operation |
+| `dd of=/dev/…` (`null`/`std*` exempt), `blkdiscard`, `> /dev/sd…` | Raw disk write |
+| `parted`/`fdisk`/`gdisk`/`sgdisk` (print/list invocations exempt) | Partition table management |
+| `cryptsetup`, `zpool` (status/list/get/history/iostat exempt) | Disk/encryption management |
+| `shutdown`, `reboot`, `halt`, `poweroff`, `init 0/6`, `systemctl poweroff…` | System power operation |
 | `Restart-Computer`, `Stop-Computer` | System power operation (Windows) |
-| `terraform destroy` | Infrastructure teardown |
-| `kubectl delete` | Kubernetes resource deletion |
-| `aws s3 rm --recursive` | Bulk S3 deletion |
-| `git push --force` / `-f` | Force-push (rewrites remote history) |
-| `git reset --hard` | Discard all uncommitted changes |
-| `git clean -f` | Delete untracked files |
-| `git reflog expire` | Remove recovery history |
-| `git gc --prune` | Prune unreachable objects |
+| `kill -1` | Kill all processes |
+| `terraform`/`tofu destroy`, `kubectl delete`, `aws s3 rm --recursive`, `gsutil rm -r`, `az group delete`, `helm uninstall` | Infrastructure teardown |
+| `git push --force`/`-f`/`+refspec` | Force-push |
+| `git reset --hard`, `git checkout/restore .` | Discard working tree changes |
+| `git clean -f`, `git reflog expire`, `git prune`, `git gc --prune`, `git branch -D` | Delete untracked files / recovery history |
 
-All other commands pass through unaffected — including **routine git operations**
-(`git commit`, `git pull`, plain `git push`, `git status`, …): a worker tasked with
-committing or pulling is not bricked; only destructive git operations are blocked.
+Read-only disk inspection (`fdisk -l`, `zpool status`, `wipefs --list`, `parted … print`) and
+routine git operations (`git commit`, `git pull`, plain `git push`, `git status`, …) pass through:
+a worker tasked with committing or pulling is not bricked.
 
 ## Install
 
@@ -71,10 +76,17 @@ Auto-discovered from `~/.pi/agent/extensions/bash-guard/`. Run `/reload` in pi.
 ## Notes
 
 - Scope: `bash` tool calls only (`write`/`edit` and user `!` commands are not intercepted).
+- Flags are registered as `bash-guard-auto-allow` and `bash-guard-disabled` and read with bare
+  names (`pi.getFlag("bash-guard-disabled")`) — pi stores flag values under the name given at
+  registration, without `--` prefixes.
 - `--bash-guard-auto-allow`: main-session flag that allows flagged commands when there is no UI
   (e.g. running pi non-interactively). Has no effect in subagent sessions.
+- `/bash-guard` toggles the interactive layer for the session; the hard-block floor still applies.
 - Hard-block patterns live in `patterns.ts` (pure module, no pi imports) and are unit-tested via
   `node test-patterns.ts`.
-- The patterns are a guard against reckless commands, **not an adversarial boundary**: nested or
-  encoded payloads (`bash -c 'rm -rf x'`, `python -c "shutil.rmtree(...)"`, base64 tricks) can
-  bypass regex matching.
+- The patterns are a guard against reckless commands, **not an adversarial boundary**. Known
+  limitations: generic interpreters (`python -c "shutil.rmtree(...)"`, base64 tricks) bypass
+  regex matching; multi-statement inner shells (`sh -c "a; rm -rf b"` — separators inside
+  quotes are neutralized to protect quoted prose) and `FOO="a b" rm -rf` (space inside an
+  assignment) can slip through; quoted sequences that look like full rule matches
+  (e.g. `grep 'git push --force'` after a wrapper-style first word) may prompt spuriously.
