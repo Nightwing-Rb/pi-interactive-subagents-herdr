@@ -429,7 +429,7 @@ export default function (pi: ExtensionAPI) {
 			const { theme } = ctx.ui;
 			const badge = theme.bg(
 				"toolErrorBg",
-				theme.bold(theme.fg("error", " ⚠ BG OFF ")),
+				theme.bold(theme.fg("error", " 🔴 BG OFF ")),
 			);
 			ctx.ui.setStatus(BASH_GUARD_STATUS_KEY, badge);
 		}
@@ -443,7 +443,7 @@ export default function (pi: ExtensionAPI) {
 				const { theme } = ctx.ui;
 				const badge = theme.bg(
 					"toolErrorBg",
-					theme.bold(theme.fg("error", " ⚠ BG OFF ")),
+					theme.bold(theme.fg("error", " 🔴 BG OFF ")),
 				);
 				ctx.ui.setStatus(BASH_GUARD_STATUS_KEY, badge);
 				ctx.ui.notify(
