@@ -9,7 +9,7 @@ identical setup: same packages, extensions, theme, models, and tool config.
 | Included (`setup/agent/` → `~/.pi/agent/`) | Excluded (machine state / secrets) |
 |---|---|
 | `settings.json` (defaults, theme, packages) | `auth.json` — API keys, **never committed** |
-| `extensions/` — ask-user-question, bash-guard, herdr-agent-state, prompt-snippets (+ snippets) | `sessions/` — conversation history |
+| `extensions/` — ask-user-question, bash-guard, herdr-agent-state, prompt-snippets (+ snippets), whimsical | `sessions/` — conversation history |
 | `themes/sapphire-ember.json` | `install/`, `bin/` — pi itself (installer handles it) |
 | `models-store.json` (xiaomi/mimo catalog) | `npm/`, `git/` — package checkouts (reinstalled by bootstrap) |
 | `compact-tools.json` | |

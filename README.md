@@ -17,7 +17,8 @@
 
 > **Machine setup.** [`setup/`](setup/README.md) snapshots this machine's full pi
 > configuration — extensions (ask-user-question, bash-guard, prompt-snippets,
-> herdr-agent-state), the sapphire-ember theme, model catalog, tool config and
+> herdr-agent-state, whimsical), the sapphire-ember theme, model catalog, tool
+> config and
 > command tweaks — with a one-shot `setup/bootstrap.ps1`. On a new machine:
 > install pi, clone this repo, run the bootstrap, `/login xiaomi`. See
 > [setup/README.md](setup/README.md).
