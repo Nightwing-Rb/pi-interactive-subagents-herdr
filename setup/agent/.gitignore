@@ -7,4 +7,5 @@ install/
 bin/
 git/
 compact-tools-notices/
+__pycache__/
 *.bak

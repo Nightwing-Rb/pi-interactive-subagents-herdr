@@ -13,6 +13,7 @@ identical setup: same packages, extensions, theme, models, and tool config.
 | `themes/sapphire-ember.json` | `install/`, `bin/` — pi itself (installer handles it) |
 | `models-store.json` (xiaomi/mimo catalog) | `npm/`, `git/` — package checkouts (reinstalled by bootstrap) |
 | `compact-tools.json` | |
+| `skills/` — youtube-transcript (with large-transcript file fallback), instagram-transcript | |
 
 The subagent extension itself **is this repo** (root: `package.json`,
 `pi-extension/`, bundled `agents/`), including all local fixes:
