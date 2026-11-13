@@ -1244,6 +1244,25 @@ describe("subagent discovery", () => {
     });
   });
 
+  it("resolveSubagentPaths keeps platform-absolute cwd absolute (Windows regression)", () => {
+    const abs = process.platform === "win32" ? "C:\\Users\\me\\proj" : "/home/me/proj";
+    const fromParam = testApi.resolveSubagentPaths({ name: "A", task: "T", cwd: abs }, null);
+    assert.equal(
+      fromParam.effectiveCwd,
+      abs,
+      "absolute cwd must stay as-is, never joined onto process.cwd()",
+    );
+
+    const relative = testApi.resolveSubagentPaths({ name: "A", task: "T", cwd: "sub/dir" }, null);
+    assert.ok(
+      relative.effectiveCwd?.replace(/\\/g, "/").endsWith("sub/dir"),
+      "relative cwd resolves against the current directory",
+    );
+
+    const none = testApi.resolveSubagentPaths({ name: "A", task: "T" }, null);
+    assert.equal(none.effectiveCwd, null, "no cwd -> inherit the session directory");
+  });
+
   it("resolves session mode from frontmatter (standalone default)", () => {
     assert.equal(testApi.resolveEffectiveSessionMode({ name: "A", task: "T" }, null), "standalone");
     assert.equal(
