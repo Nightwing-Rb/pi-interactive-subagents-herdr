@@ -105,7 +105,7 @@ const SubagentParams = Type.Object({
         "Has no effect on which agent runs — use `agent` for that.",
     }),
   ),
-  model: Type.Optional(Type.String({ description: "Model override (overrides agent default)" })),
+  model: Type.Optional(Type.String({ description: "Model override (defaults to the parent session's current model; also settable per agent in frontmatter)" })),
   cwd: Type.Optional(
     Type.String({
       description:
@@ -1205,14 +1205,23 @@ function startWidgetRefresh() {
  */
 async function launchSubagent(
   params: typeof SubagentParams.static,
-  ctx: { sessionManager: { getSessionFile(): string | null; getSessionId(): string; getSessionDir(): string }; cwd: string },
+  ctx: {
+    sessionManager: { getSessionFile(): string | null; getSessionId(): string; getSessionDir(): string };
+    cwd: string;
+    /** Current session model (ExtensionToolContext); used to inherit the parent's model. */
+    model?: { provider: string; id: string } | undefined;
+  },
   options?: { surface?: string },
 ): Promise<RunningSubagent> {
   const startTime = Date.now();
   const id = Math.random().toString(16).slice(2, 10);
 
   const agentDefs = params.agent ? loadAgentDefaults(params.agent) : null;
-  const effectiveModel = params.model ?? agentDefs?.model;
+  // Model precedence: explicit spawn param > agent frontmatter `model:` >
+  // the parent session's current model (inherit), so subagents follow whatever
+  // the orchestrator is running unless pinned or delegated otherwise.
+  const inheritedModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+  const effectiveModel = params.model ?? agentDefs?.model ?? inheritedModel;
   const effectiveTools = agentDefs?.tools;
   const effectiveSkills = agentDefs?.skills;
   const effectiveThinking = agentDefs?.thinking;

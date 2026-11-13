@@ -12,8 +12,10 @@
 >
 > **Requirements:** [pi](https://github.com/badlogic/pi-mono),
 > [herdr](https://herdr.dev) (run pi inside a herdr pane) and Git bash at
-> `C:\Program Files\Git\bin\bash.exe`. Bundled agents use
-> `xiaomi/mimo-v2.6-flash`; override per machine in `~/.pi/agent/agents/*.md`.
+> `C:\Program Files\Git\bin\bash.exe`. Bundled agents **inherit the session's
+> current model** by default; pin one per agent in frontmatter
+> (`~/.pi/agent/agents/*.md`) or delegate per spawn with the tool's `model`
+> parameter.
 
 > **Machine setup.** [`setup/`](setup/README.md) snapshots this machine's full pi
 > configuration — extensions (ask-user-question, bash-guard, prompt-snippets,
@@ -99,9 +101,9 @@ If the reply arrives while the sub-agent is still mid-turn, it is absorbed into 
 
 | Agent | Model | Tools | Role |
 | ----- | ----- | ----- | ---- |
-| **scout** | `openrouter/z-ai/glm-5.3` | `read`, `grep`, `find`, `ls` | Fast read-only codebase recon |
-| **researcher** | `openrouter/z-ai/glm-5.3` | `web_search`, `web_fetch`, `safe_bash` | Web research, synthesized into a sourced brief |
-| **worker** | `openrouter/z-ai/glm-5.3` | `read`, `write`, `edit`, `bash`, `web_search`, `web_fetch` + spawning | General implementer; may spawn `scout` and `researcher` |
+| **scout** | inherits session model | `read`, `grep`, `find`, `ls` | Fast read-only codebase recon |
+| **researcher** | inherits session model | `web_search`, `web_fetch`, `safe_bash` | Web research, synthesized into a sourced brief |
+| **worker** | inherits session model | `read`, `write`, `edit`, `bash`, `web_search`, `web_fetch` + spawning | General implementer; may spawn `scout` and `researcher` |
 
 All three are autonomous (`auto-exit: true`) and carry their identity in the system prompt (`system-prompt: append`).
 
